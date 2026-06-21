@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Family Writing Assistant</title>
+<style>
+  :root {
+    --ink: #1f2430;
+    --muted: #6b7280;
+    --border: #e3e5e8;
+    --accent: #2f5d50;
+    --accent-light: #eaf2ef;
+    --bg: #fafaf9;
+    --warn: #b3541e;
+    --error: #b3261e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 28px; }
+  .card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 4px; }
+  select, input[type="password"], input[type="text"], textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-family: inherit;
+    background: #fff;
+    color: var(--ink);
+  }
+  textarea { min-height: 220px; resize: vertical; line-height: 1.5; }
+  .row { display: flex; gap: 12px; margin-bottom: 14px; }
+  .row > div { flex: 1; }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  button:hover { opacity: 0.92; }
+  button.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .hidden { display: none !important; }
+  .who { font-size: 0.85rem; color: var(--muted); }
+  .who button { background: none; border: none; color: var(--accent); padding: 0; font-size: 0.85rem; text-decoration: underline; cursor: pointer; }
+  .issue {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+  }
+  .issue .tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--accent);
+    background: var(--accent-light);
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+  }
+  .issue .original { text-decoration: line-through; color: var(--muted); }
+  .issue .suggestion { color: var(--ink); font-weight: 500; }
+  .issue .explanation { color: var(--muted); margin-top: 4px; font-size: 0.85rem; }
+  .summary-line { font-size: 0.9rem; color: var(--muted); margin-bottom: 14px; font-style: italic; }
+  .feedback-text { white-space: pre-wrap; line-height: 1.6; font-size: 0.95rem; }
+  .read-badge {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 5px;
+    margin-bottom: 10px;
+  }
+  .read-badge.voice { background: var(--accent-light); color: var(--accent); }
+  .read-badge.mixed { background: #fdf3e7; color: #7a4a12; }
+  .read-badge.generic { background: #fbe9e7; color: var(--warn); }
+  .marker-list { margin: 8px 0 0 18px; padding: 0; font-size: 0.88rem; }
+  .marker-list li { margin-bottom: 4px; }
+  .caveat { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+  .error-box { color: var(--error); font-size: 0.88rem; margin-top: 10px; }
+  .loading { color: var(--muted); font-size: 0.88rem; margin-top: 10px; }
+  .config-warning {
+    background: #fdf3e7; border: 1px solid #f0d6ad; color: #7a4a12;
+    border-radius: 8px; padding: 12px 14px; font-size: 0.85rem; margin-bottom: 20px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Family Writing Assistant</h1>
+  <div class="subtitle">Grammar, spelling and style checking, plus coaching feedback on your own writing.</div>
+
+  <div id="configWarning" class="config-warning hidden">
+    The Worker URL hasn't been set yet. Open this file and edit <code>WORKER_URL</code> near the top of the
+    <code>&lt;script&gt;</code> block once the Cloudflare Worker is deployed.
+  </div>
+
+  <!-- Login card -->
+  <div id="loginCard" class="card">
+    <div class="row">
+      <div>
+        <label for="nameSelect">Who's writing?</label>
+        <select id="nameSelect">
+          <option value="">Select your name</option>
+          <option value="Mike">Mike</option>
+          <option value="Lucy">Lucy</option>
+          <option value="Benjamin">Benjamin</option>
+          <option value="Joel">Joel</option>
+          <option value="Charlotte">Charlotte</option>
+        </select>
+      </div>
+      <div>
+        <label for="pinInput">PIN</label>
+        <input type="password" id="pinInput" inputmode="numeric" maxlength="6" placeholder="••••">
+      </div>
+    </div>
+    <button id="loginBtn">Log in</button>
+    <div id="loginError" class="error-box hidden"></div>
+  </div>
+
+  <!-- Main panel, shown after login -->
+  <div id="mainPanel" class="hidden">
+    <div class="who">
+      Writing as <strong id="whoName"></strong> — <button id="logoutBtn">not you? log out</button>
+    </div>
+
+    <div class="card" style="margin-top: 14px;">
+      <label for="textArea">Paste or write your text</label>
+      <textarea id="textArea" placeholder="Paste your essay, email or piece of writing here..."></textarea>
+
+      <div class="row" style="margin-top: 14px;">
+        <div>
+          <label for="questionInput">Question for the writing coach (optional)</label>
+          <input type="text" id="questionInput" placeholder="e.g. Is my argument in paragraph 2 convincing?">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="checkBtn">Check grammar &amp; style</button>
+        <button id="assistBtn" class="secondary">Get writing help</button>
+        <button id="aiCheckBtn" class="secondary">Does this sound like me?</button>
+      </div>
+
+      <div id="statusArea"></div>
+    </div>
+
+    <div id="resultsCard" class="card hidden">
+      <div id="resultsContent"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // ---- CONFIGURE THIS AFTER DEPLOYING THE WORKER ----
+  // Replace with your deployed Cloudflare Worker URL, e.g.
+  // "https://family-writing-assistant.yoursubdomain.workers.dev"
+  const WORKER_URL = "REPLACE_WITH_YOUR_WORKER_URL";
+  // ----------------------------------------------------
+
+  const state = { name: "", pin: "" };
+
+  const el = (id) => document.getElementById(id);
+
+  function init() {
+    if (!WORKER_URL || WORKER_URL.startsWith("REPLACE_")) {
+      el("configWarning").classList.remove("hidden");
+    }
+
+    const savedName = localStorage.getItem("fwa_name");
+    const savedPin = localStorage.getItem("fwa_pin");
+    if (savedName && savedPin) {
+      state.name = savedName;
+      state.pin = savedPin;
+      showMainPanel();
+    }
+
+    el("loginBtn").addEventListener("click", handleLogin);
+    el("logoutBtn").addEventListener("click", handleLogout);
+    el("checkBtn").addEventListener("click", handleCheck);
+    el("assistBtn").addEventListener("click", handleAssist);
+    el("aiCheckBtn").addEventListener("click", handleAiCheck);
+    el("pinInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") handleLogin();
+    });
+  }
+
+  function handleLogin() {
+    const name = el("nameSelect").value;
+    const pin = el("pinInput").value.trim();
+    el("loginError").classList.add("hidden");
+
+    if (!name || !pin) {
+      el("loginError").textContent = "Select your name and enter your PIN.";
+      el("loginError").classList.remove("hidden");
+      return;
+    }
+
+    // We don't validate the PIN here — the Worker does, on first real request.
+    state.name = name;
+    state.pin = pin;
+    localStorage.setItem("fwa_name", name);
+    localStorage.setItem("fwa_pin", pin);
+    showMainPanel();
+  }
+
+  function handleLogout() {
+    localStorage.removeItem("fwa_name");
+    localStorage.removeItem("fwa_pin");
+    state.name = "";
+    state.pin = "";
+    el("mainPanel").classList.add("hidden");
+    el("loginCard").classList.remove("hidden");
+    el("pinInput").value = "";
+  }
+
+  function showMainPanel() {
+    el("loginCard").classList.add("hidden");
+    el("mainPanel").classList.remove("hidden");
+    el("whoName").textContent = state.name;
+  }
+
+  function setStatus(message, isError) {
+    const area = el("statusArea");
+    if (!message) {
+      area.innerHTML = "";
+      return;
+    }
+    area.innerHTML = `<div class="${isError ? "error-box" : "loading"}">${escapeHtml(message)}</div>`;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  async function callWorker(path, body) {
+    const res = await fetch(WORKER_URL.replace(/\/$/, "") + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || `Request failed (${res.status})`);
+    }
+    return data;
+  }
+
+  async function handleCheck() {
+    const text = el("textArea").value;
+    if (!text.trim()) {
+      setStatus("Paste some text first.", true);
+      return;
+    }
+    setStatus("Checking...", false);
+    el("resultsCard").classList.add("hidden");
+
+    try {
+      const data = await callWorker("/check", { text, name: state.name, pin: state.pin });
+      renderCheckResults(data);
+      setStatus("", false);
+    } catch (err) {
+      if (String(err.message).includes("Invalid name or PIN")) {
+        handleLogout();
+        setStatus("Your PIN wasn't recognised — please log in again.", true);
+      } else {
+        setStatus("Couldn't check your writing: " + err.message, true);
+      }
+    }
+  }
+
+  async function handleAssist() {
+    const text = el("textArea").value;
+    const question = el("questionInput").value.trim();
+    if (!text.trim()) {
+      setStatus("Paste some text first.", true);
+      return;
+    }
+    setStatus("Thinking about your writing...", false);
+    el("resultsCard").classList.add("hidden");
+
+    try {
+      const data = await callWorker("/assist", { text, name: state.name, pin: state.pin, question });
+      renderAssistResults(data);
+      setStatus("", false);
+    } catch (err) {
+      if (String(err.message).includes("Invalid name or PIN")) {
+        handleLogout();
+        setStatus("Your PIN wasn't recognised — please log in again.", true);
+      } else {
+        setStatus("Couldn't get feedback: " + err.message, true);
+      }
+    }
+  }
+
+  async function handleAiCheck() {
+    const text = el("textArea").value;
+    if (!text.trim()) {
+      setStatus("Paste some text first.", true);
+      return;
+    }
+    setStatus("Reading your writing...", false);
+    el("resultsCard").classList.add("hidden");
+
+    try {
+      const data = await callWorker("/ai-check", { text, name: state.name, pin: state.pin });
+      renderAiCheckResults(data);
+      setStatus("", false);
+    } catch (err) {
+      if (String(err.message).includes("Invalid name or PIN")) {
+        handleLogout();
+        setStatus("Your PIN wasn't recognised — please log in again.", true);
+      } else {
+        setStatus("Couldn't run the check: " + err.message, true);
+      }
+    }
+  }
+
+  function renderCheckResults(data) {
+    const card = el("resultsCard");
+    const content = el("resultsContent");
+    card.classList.remove("hidden");
+
+    let html = `<div class="summary-line">${escapeHtml(data.summary || "")}</div>`;
+
+    if (!data.issues || data.issues.length === 0) {
+      html += "<p>No issues found.</p>";
+    } else {
+      for (const issue of data.issues) {
+        html += `
+          <div class="issue">
+            <span class="tag">${escapeHtml(issue.type || "issue")}</span><br>
+            <span class="original">${escapeHtml(issue.original || "")}</span> →
+            <span class="suggestion">${escapeHtml(issue.suggestion || "")}</span>
+            <div class="explanation">${escapeHtml(issue.explanation || "")}</div>
+          </div>`;
+      }
+    }
+    content.innerHTML = html;
+  }
+
+  function renderAssistResults(data) {
+    const card = el("resultsCard");
+    const content = el("resultsContent");
+    card.classList.remove("hidden");
+    content.innerHTML = `<div class="feedback-text">${escapeHtml(data.feedback || "")}</div>`;
+  }
+
+  function renderAiCheckResults(data) {
+    const card = el("resultsCard");
+    const content = el("resultsContent");
+    card.classList.remove("hidden");
+
+    const badgeClass = data.read === "reads as your own voice" ? "voice"
+      : data.read === "mixed — some generic patches" ? "mixed"
+      : "generic";
+
+    let html = `<span class="read-badge ${badgeClass}">${escapeHtml(data.read || "")}</span>`;
+
+    if (data.markers && data.markers.length > 0) {
+      html += `<ul class="marker-list">${data.markers.map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul>`;
+    }
+    if (data.note) {
+      html += `<div class="feedback-text" style="margin-top: 8px;">${escapeHtml(data.note)}</div>`;
+    }
+    html += `<div class="caveat">This is a stylistic read, not a verdict — these checks (including paid detector tools) are routinely wrong, especially on short text. Treat it as a nudge to add more of your own voice, not as proof either way.</div>`;
+
+    content.innerHTML = html;
+  }
+
+  init();
+</script>
+</body>
+</html>
