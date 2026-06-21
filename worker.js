@@ -1,11 +1,17 @@
 /**
  * Family Writing Assistant — Cloudflare Worker
  *
- * Three endpoints:
- *   POST /check     — grammar, spelling, punctuation and style/clarity check
+ * Five endpoints:
+ *   POST /check      — grammar, spelling, punctuation and style/clarity check
  *   POST /assist     — writing feedback and coaching (NOT finished-text generation)
- *   POST /ai-check    — qualitative AI-writing-likelihood self-check (heuristic, not a
- *                        calibrated classifier — see ASSESS_SYSTEM_PROMPT for caveats)
+ *   POST /ai-check   — qualitative AI-writing-likelihood self-check (heuristic, not a
+ *                       calibrated classifier — see AI_LIKELIHOOD_SYSTEM_PROMPT for caveats)
+ *   POST /critique   — paragraph-by-paragraph feedback boxes, calibrated per child
+ *                       (see CHILD_PROFILES) — Charlotte (11+), Joel (Year 7 grammar
+ *                       school), Benjamin (GCSE, Edexcel)
+ *   POST /mark       — overall mark/profile, calibrated per child (see CHILD_PROFILES) —
+ *                       qualitative for Charlotte and Joel (neither has an official
+ *                       numeric scale), Edexcel-calibrated numeric for Benjamin
  *
  * Required Worker secrets/vars (set via `wrangler secret put` or the
  * Cloudflare dashboard — Settings > Variables):
@@ -117,6 +123,94 @@ Important context for how to respond:
   "note": "one or two sentences of plain-language explanation and a suggestion for where to add more of your own voice, if relevant — plain prose only, no markdown"
 }`;
 
+// ---- Per-child calibration for /critique and /mark ----
+// Researched 21 June 2026: the Kent Test's writing task is not scored
+// numerically (only reviewed qualitatively by a headteacher panel in
+// borderline cases, judged against grammar, imagination and written
+// expression); the ISEB Common Pre-Test has no creative-writing component
+// at all (comprehension and SPaG only — any actual writing paper is set
+// separately by the individual senior school). So Charlotte's profile is
+// deliberately qualitative, not a fabricated score. Likewise there is no
+// official current numeric scale for Key Stage 3 writing (National
+// Curriculum "levels" were abolished in 2014), so Joel's profile is
+// qualitative too. Benjamin studies under Pearson Edexcel, whose AO
+// weightings and mark totals vary by component (Shakespeare, post-1914
+// prose, the poetry anthology, English Language) unlike AQA's single
+// unified 30+4 structure — his profile requires identifying the
+// component before committing to a mark.
+const CHILD_PROFILES = {
+  Charlotte: {
+    label: "Charlotte (Year 5, age 9, preparing for 11+ — Kent Test and ISEB-track admissions)",
+    critique: `The writer is Charlotte, age 9, Year 5, preparing for 11+ entry (Kent Test and/or ISEB-track senior school admissions). Calibrate feedback to what actually matters at this stage:
+- full stops, capital letters, and not running sentences together;
+- varied, interesting vocabulary instead of repeating simple words;
+- clear paragraphing for new ideas, or a change of time or place;
+- a clear beginning, middle and end (or a clear structure for non-story writing);
+- basic punctuation: commas in lists, question marks, simple apostrophes;
+- descriptive detail that shows rather than just tells.
+Use simple, warm, encouraging language with no exam jargon at all. Every label and explanation must be understandable by a 9-year-old reading it herself.`,
+    mark: `The writer is Charlotte, age 9, Year 5, preparing for 11+ entry. Two pathways are relevant, and neither has an official numeric mark scheme for writing: the Kent Test's writing task is not scored as part of the main test at all, it is only reviewed qualitatively by a headteacher panel in borderline cases, judged against grammar, imagination and written expression, similarly to primary writing standards; and the ISEB Common Pre-Test has no creative-writing component whatsoever (it tests comprehension and SPaG only) — any actual writing paper is set separately by the individual senior school. Do not invent a numeric score or grade; say plainly that neither pathway has one. Instead give a qualitative profile against what both pathways actually care about: ideas and imagination, structure and organisation, vocabulary and sentence variety, and accuracy (spelling, punctuation, grammar). Give a plain comparative steer (e.g. "strong for a typical 11+ writing sample", "developing — solid Year 5 work but not yet standing out") and concrete next steps.`,
+  },
+  Joel: {
+    label: "Joel (Year 7, age 11, highly selective grammar school)",
+    critique: `The writer is Joel, age 11, Year 7, at a highly selective grammar school. Calibrate feedback above primary-school basics but well below GCSE level: sentence variety and control (catching run-ons and fragments), paragraph structure, precise and ambitious vocabulary, accurate punctuation including apostrophes and an introduction to semi-colons, and — where the piece is analytical — basic recognition of technique (e.g. simile, repetition, structure) without GCSE assessment-objective jargon he hasn't met yet. Push him toward more sophistication without overwhelming him with exam terminology.`,
+    mark: `The writer is Joel, age 11, Year 7, at a highly selective grammar school. There is no official current numeric marking scale for Key Stage 3 writing — the old National Curriculum "levels" were abolished in 2014 and nothing nationally standard has replaced them. Do not invent a fake score or grade. Instead give a qualitative profile against: ideas and content, structure and organisation, sentence variety and control, vocabulary precision, and accuracy (spelling, punctuation, grammar) — pitched at what a high-attaining pupil at a selective school should be capable of. Give a plain comparative steer relative to Year 7 expectations (e.g. "working confidently above the expected standard for Year 7", "shows control more typical of Year 8 or 9 work in places", "some basics still need to be secure for this stage") and concrete next steps.`,
+  },
+  Benjamin: {
+    label: "Benjamin (Year 10, age 15, GCSE — Pearson Edexcel)",
+    critique: `The writer is Benjamin, age 15, Year 10, studying GCSEs under the Pearson Edexcel specifications. Calibrate feedback at GCSE level: sentence control and accuracy, precise word choice, quotation accuracy where relevant, structure and the development of an argument or analysis, and — where the piece analyses a text — the difference between explaining a point and analysing how a writer achieves an effect (naming a technique, then zooming into a specific word, phrase or sound and its impact). Use accessible labels in the feedback boxes themselves (no raw AO numbers), but the level of expectation should be genuinely GCSE-calibrated, not generic.`,
+    mark: `The writer is Benjamin, age 15, Year 10, studying GCSE English under the Pearson Edexcel specification — NOT AQA. Edexcel's assessment objectives are AO1 (read, understand and respond to texts), AO2 (analyse language, form and structure), AO3 (relationship between text and context), AO4 (accuracy of vocabulary, spelling, punctuation and grammar, folded into the literature mark itself rather than scored separately as AQA does with SPaG). Mark totals and AO weightings vary meaningfully by component and question type under Edexcel — Shakespeare and post-1914 prose, the 19th-century novel, the poetry anthology and unseen poetry comparison, and English Language (which uses AO5/AO6 for writing) are all weighted differently. First identify which component and question type this piece is answering, from the text itself or any context given. If you cannot tell with reasonable confidence, say so plainly and ask which paper/component this is for rather than guessing a mark total that may be wrong — do not produce a numeric mark in that case. Where it is clear, state the component, the relevant AOs and their approximate weighting, then give a mark out of the correct total with band-level rationale in the style of a real examiner report: what's solidly in the band, what's just missing the band above, and what would close the gap. Always end with an honest caveat that this is an indicative assessment against published descriptors, not an official moderated mark, and that grade boundaries move year to year.`,
+  },
+};
+
+const ADULT_PROFILE = {
+  label: "an adult family member",
+  critique: `The writer is an adult. Calibrate feedback to general professional or personal writing clarity: sentence control, precision, structure and flow. No school-specific framing, no exam jargon.`,
+  mark: `The writer is an adult, not one of the children this marking feature was built for. There is no formal marking scheme to apply. Do not produce a numeric mark or grade. Say plainly that this feature is calibrated to the children's school-stage marking and isn't meaningful for adult writing, and suggest using the writing-coach feedback instead.`,
+};
+
+function profileFor(name) {
+  return CHILD_PROFILES[name] || ADULT_PROFILE;
+}
+
+function buildCritiquePrompt(name) {
+  const profile = profileFor(name);
+  return `You are giving paragraph-by-paragraph writing feedback in a specific format, calibrated to the writer described below.
+
+${profile.critique}
+
+Format requirements, these are strict:
+- The submitted text is split into paragraphs by blank lines. You will be told how many paragraphs there are. Return EXACTLY one feedback box per paragraph, in the same order, even if a paragraph has nothing wrong with it — in that case give it a single encouraging note rather than skipping it. Never skip a paragraph.
+- Each note must start with a short bracketed-style label (e.g. SENTENCE, SPELLING, PUNCTUATION, WORD CHOICE, STRUCTURE, WELL DONE) describing the kind of note, calibrated to the writer's level as described above — do not use GCSE/exam jargon for Charlotte or Joel.
+- Quote the exact words from the essay you are commenting on wherever possible, so the writer can find them.
+- Be specific and concrete, never vague ("this could be better").
+- End with exactly three top priorities — the three changes that would most improve the piece, in order of impact — and one short encouraging closing line.
+- Return ONLY valid JSON, no other text, in this exact shape:
+{
+  "boxes": [
+    { "heading": "short heading, e.g. Notes on your introduction, or Notes on paragraph 2", "notes": [ { "label": "SENTENCE", "text": "the note itself" } ] }
+  ],
+  "priorities": ["first priority", "second priority", "third priority"],
+  "closingNote": "one short encouraging sentence"
+}`;
+}
+
+function buildMarkPrompt(name) {
+  const profile = profileFor(name);
+  return `You are giving an overall assessment of a piece of writing, calibrated to the writer described below.
+
+${profile.mark}
+
+Format requirements:
+- Plain prose only in the narrative field. You may use **bold** for short labels and "- " for bullet points, with a blank line between paragraphs or list blocks. No markdown headers, numbered lists or code blocks.
+- The headline field is a single short line summarising the result (e.g. "Mark: 23/30 (indicative)" or "Profile: strong ideas, structure needs work" or "Need a bit more information first").
+- Return ONLY valid JSON, no other text, in this exact shape:
+{
+  "headline": "one short line",
+  "narrative": "the full assessment, plain prose with the limited markdown described above"
+}`;
+}
+
 async function handleCheck(request, env) {
   const { text, name, pin } = await request.json();
 
@@ -190,6 +284,67 @@ async function handleAiCheck(request, env) {
   }
 }
 
+function countParagraphs(text) {
+  return text.split(/\n\s*\n/).filter((p) => p.trim() !== "").length;
+}
+
+async function handleCritique(request, env) {
+  const { text, name, pin } = await request.json();
+
+  if (!checkAuth(name, pin, env)) {
+    return jsonResponse({ error: "Invalid name or PIN." }, 401, env);
+  }
+  if (!text || !text.trim()) {
+    return jsonResponse({ error: "No text provided." }, 400, env);
+  }
+
+  const paragraphCount = countParagraphs(text);
+  const userMessage = `This piece of writing has ${paragraphCount} paragraph(s), split by blank lines. Return exactly ${paragraphCount} box(es), one per paragraph, in order.\n\nHere is the writing:\n\n${text}`;
+
+  try {
+    const raw = await callClaude(env, buildCritiquePrompt(name), userMessage, 3000);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      const stripped = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+      parsed = JSON.parse(stripped);
+    }
+    return jsonResponse(parsed, 200, env);
+  } catch (err) {
+    return jsonResponse({ error: String(err.message || err) }, 502, env);
+  }
+}
+
+async function handleMark(request, env) {
+  const { text, name, pin, context } = await request.json();
+
+  if (!checkAuth(name, pin, env)) {
+    return jsonResponse({ error: "Invalid name or PIN." }, 401, env);
+  }
+  if (!text || !text.trim()) {
+    return jsonResponse({ error: "No text provided." }, 400, env);
+  }
+
+  const userMessage = context
+    ? `Here is the piece of writing to mark:\n\n${text}\n\nExtra context from the writer: ${context}`
+    : `Here is the piece of writing to mark:\n\n${text}`;
+
+  try {
+    const raw = await callClaude(env, buildMarkPrompt(name), userMessage, 1500);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      const stripped = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+      parsed = JSON.parse(stripped);
+    }
+    return jsonResponse(parsed, 200, env);
+  } catch (err) {
+    return jsonResponse({ error: String(err.message || err) }, 502, env);
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -207,7 +362,13 @@ export default {
     if (request.method === "POST" && url.pathname === "/ai-check") {
       return handleAiCheck(request, env);
     }
+    if (request.method === "POST" && url.pathname === "/critique") {
+      return handleCritique(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/mark") {
+      return handleMark(request, env);
+    }
 
-    return jsonResponse({ error: "Not found. Use POST /check, /assist, or /ai-check." }, 404, env);
+    return jsonResponse({ error: "Not found. Use POST /check, /assist, /ai-check, /critique, or /mark." }, 404, env);
   },
 };

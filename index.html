@@ -106,6 +106,44 @@
   .feedback-text p:last-child { margin-bottom: 0; }
   .feedback-text ul { margin: 0 0 10px 18px; padding: 0; }
   .cached-note { font-size: 0.78rem; color: var(--muted); margin-top: 8px; font-style: italic; }
+  .essay-para { line-height: 1.6; font-size: 0.95rem; margin-bottom: 4px; }
+  .feedback-box {
+    border-left: 4px solid #2E75B6;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 6px 0 18px;
+    font-size: 0.88rem;
+    line-height: 1.55;
+  }
+  .feedback-box.c0 { background: #EAF1F8; }
+  .feedback-box.c1 { background: #ECF6E8; }
+  .feedback-box.c2 { background: #FFF6E9; }
+  .feedback-box.c3 { background: #F2F2F2; }
+  .feedback-box .box-heading { font-weight: 700; color: #1F3864; margin-bottom: 6px; display: block; }
+  .feedback-box .note-label { font-weight: 700; }
+  .feedback-box .note { margin-bottom: 6px; }
+  .feedback-box .note:last-child { margin-bottom: 0; }
+  .priorities-box {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-light);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-top: 10px;
+    font-size: 0.9rem;
+  }
+  .priorities-box .box-heading { font-weight: 700; color: var(--accent); display: block; margin-bottom: 6px; }
+  .priorities-box ol { margin: 0 0 8px 18px; padding: 0; }
+  .priorities-box li { margin-bottom: 4px; }
+  .mark-headline {
+    display: inline-block;
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--accent);
+    background: var(--accent-light);
+    padding: 6px 12px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
   .error-box { color: var(--error); font-size: 0.88rem; margin-top: 10px; }
   .loading { color: var(--muted); font-size: 0.88rem; margin-top: 10px; }
   .config-warning {
@@ -118,7 +156,7 @@
 <div class="wrap">
 
   <h1>Family Writing Assistant</h1>
-  <div class="subtitle">Grammar, spelling and style checking, plus coaching feedback on your own writing.</div>
+  <div class="subtitle">Grammar, spelling and style checking, coaching feedback, and age-appropriate critique and marking.</div>
 
   <div id="configWarning" class="config-warning hidden">
     The Worker URL hasn't been set yet. Open this file and edit <code>WORKER_URL</code> near the top of the
@@ -160,8 +198,8 @@
 
       <div class="row" style="margin-top: 14px;">
         <div>
-          <label for="questionInput">Question for the writing coach (optional)</label>
-          <input type="text" id="questionInput" placeholder="e.g. Is my argument in paragraph 2 convincing?">
+          <label for="questionInput">Anything extra to add? (optional)</label>
+          <input type="text" id="questionInput" placeholder="A question for the coach, or which exam/paper this is for">
         </div>
       </div>
 
@@ -169,6 +207,8 @@
         <button id="checkBtn">Check grammar &amp; style</button>
         <button id="assistBtn" class="secondary">Get writing help</button>
         <button id="aiCheckBtn" class="secondary">Does this sound like me?</button>
+        <button id="critiqueBtn" class="secondary">Critique my writing</button>
+        <button id="markBtn" class="secondary">Mark my writing</button>
       </div>
 
       <div id="statusArea"></div>
@@ -206,6 +246,8 @@
     el("checkBtn").addEventListener("click", handleCheck);
     el("assistBtn").addEventListener("click", handleAssist);
     el("aiCheckBtn").addEventListener("click", handleAiCheck);
+    el("critiqueBtn").addEventListener("click", handleCritique);
+    el("markBtn").addEventListener("click", handleMark);
     el("pinInput").addEventListener("keydown", (e) => {
       if (e.key === "Enter") handleLogin();
     });
@@ -416,6 +458,71 @@
     }
   }
 
+  async function handleCritique() {
+    const text = el("textArea").value;
+    if (!text.trim()) {
+      setStatus("Paste some text first.", true);
+      return;
+    }
+
+    const cached = getCache("fwa_cache_critique");
+    if (cached && cached.text === text) {
+      renderCritiqueResults(cached.result);
+      showCachedNote();
+      return;
+    }
+
+    setStatus("Reading through paragraph by paragraph...", false);
+    el("resultsCard").classList.add("hidden");
+
+    try {
+      const data = await callWorker("/critique", { text, name: state.name, pin: state.pin });
+      renderCritiqueResults(data);
+      setCache("fwa_cache_critique", { text, result: data });
+      setStatus("", false);
+    } catch (err) {
+      if (String(err.message).includes("Invalid name or PIN")) {
+        handleLogout();
+        setStatus("Your PIN wasn't recognised — please log in again.", true);
+      } else {
+        setStatus("Couldn't critique your writing: " + err.message, true);
+      }
+    }
+  }
+
+  async function handleMark() {
+    const text = el("textArea").value;
+    const context = el("questionInput").value.trim();
+    if (!text.trim()) {
+      setStatus("Paste some text first.", true);
+      return;
+    }
+
+    const cached = getCache("fwa_cache_mark");
+    if (cached && cached.text === text && cached.context === context) {
+      renderMarkResults(cached.result);
+      showCachedNote();
+      return;
+    }
+
+    setStatus("Marking...", false);
+    el("resultsCard").classList.add("hidden");
+
+    try {
+      const data = await callWorker("/mark", { text, name: state.name, pin: state.pin, context });
+      renderMarkResults(data);
+      setCache("fwa_cache_mark", { text, context, result: data });
+      setStatus("", false);
+    } catch (err) {
+      if (String(err.message).includes("Invalid name or PIN")) {
+        handleLogout();
+        setStatus("Your PIN wasn't recognised — please log in again.", true);
+      } else {
+        setStatus("Couldn't mark your writing: " + err.message, true);
+      }
+    }
+  }
+
   function renderCheckResults(data) {
     const card = el("resultsCard");
     const content = el("resultsContent");
@@ -464,6 +571,56 @@
       html += `<div class="feedback-text" style="margin-top: 8px;">${renderMarkdownish(data.note)}</div>`;
     }
     html += `<div class="caveat">This is a stylistic read, not a verdict — these checks (including paid detector tools) are routinely wrong, especially on short text. Treat it as a nudge to add more of your own voice, not as proof either way.</div>`;
+
+    content.innerHTML = html;
+  }
+
+  function renderCritiqueResults(data) {
+    const card = el("resultsCard");
+    const content = el("resultsContent");
+    card.classList.remove("hidden");
+
+    // Split the original text into paragraphs the same way the Worker does
+    // (blank-line separated), so each paragraph can sit directly above its
+    // matching feedback box, mirroring the attached example's layout.
+    const text = el("textArea").value;
+    const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim() !== "");
+    const boxes = data.boxes || [];
+
+    let html = "";
+    const count = Math.max(paragraphs.length, boxes.length);
+    for (let i = 0; i < count; i++) {
+      if (paragraphs[i]) {
+        html += `<p class="essay-para">${escapeHtml(paragraphs[i]).replace(/\n/g, "<br>")}</p>`;
+      }
+      const box = boxes[i];
+      if (box) {
+        const colorClass = "c" + (i % 4);
+        const notesHtml = (box.notes || [])
+          .map((n) => `<div class="note"><span class="note-label">[${escapeHtml(n.label || "NOTE")}]</span> ${escapeHtml(n.text || "")}</div>`)
+          .join("");
+        html += `<div class="feedback-box ${colorClass}"><span class="box-heading">${escapeHtml(box.heading || "Notes")}</span>${notesHtml}</div>`;
+      }
+    }
+
+    if (data.priorities && data.priorities.length > 0) {
+      const itemsHtml = data.priorities.map((p) => `<li>${escapeHtml(p)}</li>`).join("");
+      html += `<div class="priorities-box"><span class="box-heading">Your top priorities</span><ol>${itemsHtml}</ol>${data.closingNote ? `<div>${escapeHtml(data.closingNote)}</div>` : ""}</div>`;
+    }
+
+    content.innerHTML = html;
+  }
+
+  function renderMarkResults(data) {
+    const card = el("resultsCard");
+    const content = el("resultsContent");
+    card.classList.remove("hidden");
+
+    let html = "";
+    if (data.headline) {
+      html += `<div class="mark-headline">${escapeHtml(data.headline)}</div>`;
+    }
+    html += `<div class="feedback-text">${renderMarkdownish(data.narrative || "")}</div>`;
 
     content.innerHTML = html;
   }
