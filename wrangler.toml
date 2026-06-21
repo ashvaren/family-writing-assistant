@@ -3,5 +3,5 @@ main = "worker.js"
 compatibility_date = "2026-06-21"
 
 [vars]
-ALLOWED_ORIGIN = "https://REPLACE-WITH-YOUR-GITHUB-USERNAME.github.io"
+ALLOWED_ORIGIN = "https://ashvaren.github.io"
 MODEL = "claude-haiku-4-5-20251001"
