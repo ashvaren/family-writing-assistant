@@ -102,7 +102,7 @@ Strict rules, these override anything else:
 - If asked directly to "write it for me" or similar, decline briefly and redirect to coaching instead — be matter-of-fact about it, not preachy.
 - Keep the tone encouraging but honest. Do not over-praise weak work.
 
-Respond in plain prose, not JSON.`;
+Formatting: plain prose only. You may use **bold** for short labels (e.g. **What's working:**) and "- " for bullet points, with a blank line between paragraphs or list blocks. Do not use markdown headers (#), numbered lists, code blocks, or any other markdown syntax — the frontend only renders bold, bullets and paragraphs.`;
 
 const AI_LIKELIHOOD_SYSTEM_PROMPT = `You are helping someone self-check a piece of their own writing for whether it reads as AI-generated, before they submit it.
 
@@ -114,7 +114,7 @@ Important context for how to respond:
 {
   "read": "reads as your own voice" | "mixed — some generic patches" | "reads like generic/AI-style prose",
   "markers": ["specific pattern observed, if any", "..."],
-  "note": "one or two sentences of plain-language explanation and a suggestion for where to add more of your own voice, if relevant"
+  "note": "one or two sentences of plain-language explanation and a suggestion for where to add more of your own voice, if relevant — plain prose only, no markdown"
 }`;
 
 async function handleCheck(request, env) {
