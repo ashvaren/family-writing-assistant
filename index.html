@@ -150,6 +150,48 @@
     background: #fdf3e7; border: 1px solid #f0d6ad; color: #7a4a12;
     border-radius: 8px; padding: 12px 14px; font-size: 0.85rem; margin-bottom: 20px;
   }
+  button.small { padding: 6px 14px; font-size: 0.82rem; }
+  .result-actions { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+  .link-btn { background: none; border: none; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: 0.85rem; padding: 0; }
+
+  /* History modal */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(20, 22, 26, 0.45);
+    display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50;
+  }
+  .modal-card {
+    background: #fff; border-radius: 10px; max-width: 560px; width: 100%;
+    max-height: 80vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px; border-bottom: 1px solid var(--border); font-weight: 600;
+  }
+  #historyListArea { padding: 10px 20px 20px; overflow-y: auto; }
+  .history-entry {
+    border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+    margin-top: 10px; cursor: pointer; font-size: 0.85rem;
+  }
+  .history-entry:hover { border-color: var(--accent); background: var(--accent-light); }
+  .history-type {
+    display: inline-block; text-transform: uppercase; font-size: 0.7rem; font-weight: 700;
+    color: var(--accent); background: var(--accent-light); padding: 1px 6px; border-radius: 4px; margin-right: 6px;
+  }
+  .history-name { font-weight: 600; margin-right: 6px; }
+  .history-date { color: var(--muted); }
+  .history-title { margin-top: 4px; color: var(--ink); }
+
+  @media print {
+    body * { visibility: hidden; }
+    #resultsCard, #resultsCard * { visibility: visible; }
+    #resultsCard {
+      position: absolute; left: 0; top: 0; width: 100%; border: none; box-shadow: none; padding: 0;
+    }
+    #resultActions { display: none !important; }
+    .feedback-box, .priorities-box, .mark-headline, .read-badge {
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+  }
 </style>
 </head>
 <body>
@@ -210,21 +252,38 @@
         <button id="critiqueBtn" class="secondary">Critique my writing</button>
         <button id="markBtn" class="secondary">Mark my writing</button>
       </div>
+      <div class="actions" style="margin-top: 6px;">
+        <button id="historyBtn" class="link-btn">View past critiques &amp; marks</button>
+      </div>
 
       <div id="statusArea"></div>
     </div>
 
     <div id="resultsCard" class="card hidden">
       <div id="resultsContent"></div>
+      <div id="resultActions" class="result-actions hidden">
+        <button id="printBtn" class="secondary small">Print</button>
+        <button id="emailBtn" class="secondary small">Email</button>
+      </div>
     </div>
   </div>
 
 </div>
 
+<div id="historyModal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span>Past critiques &amp; marks</span>
+      <button id="historyCloseBtn" class="link-btn">Close</button>
+    </div>
+    <div id="historyListArea"></div>
+  </div>
+</div>
+
 <script>
   const WORKER_URL = "https://family-writing-assistant.mike-bc0.workers.dev";
 
-  const state = { name: "", pin: "" };
+  const state = { name: "", pin: "", lastResultType: "", lastResultData: null, lastResultText: "" };
 
   const el = (id) => document.getElementById(id);
 
@@ -248,6 +307,10 @@
     el("aiCheckBtn").addEventListener("click", handleAiCheck);
     el("critiqueBtn").addEventListener("click", handleCritique);
     el("markBtn").addEventListener("click", handleMark);
+    el("historyBtn").addEventListener("click", openHistory);
+    el("historyCloseBtn").addEventListener("click", closeHistory);
+    el("printBtn").addEventListener("click", () => window.print());
+    el("emailBtn").addEventListener("click", emailResults);
     el("pinInput").addEventListener("keydown", (e) => {
       if (e.key === "Enter") handleLogin();
     });
@@ -467,7 +530,7 @@
 
     const cached = getCache("fwa_cache_critique");
     if (cached && cached.text === text) {
-      renderCritiqueResults(cached.result);
+      renderCritiqueResults(cached.result, text);
       showCachedNote();
       return;
     }
@@ -477,7 +540,7 @@
 
     try {
       const data = await callWorker("/critique", { text, name: state.name, pin: state.pin });
-      renderCritiqueResults(data);
+      renderCritiqueResults(data, text);
       setCache("fwa_cache_critique", { text, result: data });
       setStatus("", false);
     } catch (err) {
@@ -500,7 +563,7 @@
 
     const cached = getCache("fwa_cache_mark");
     if (cached && cached.text === text && cached.context === context) {
-      renderMarkResults(cached.result);
+      renderMarkResults(cached.result, text);
       showCachedNote();
       return;
     }
@@ -510,7 +573,7 @@
 
     try {
       const data = await callWorker("/mark", { text, name: state.name, pin: state.pin, context });
-      renderMarkResults(data);
+      renderMarkResults(data, text);
       setCache("fwa_cache_mark", { text, context, result: data });
       setStatus("", false);
     } catch (err) {
@@ -523,10 +586,27 @@
     }
   }
 
+  // Print and email are only offered for /critique and /mark results, per
+  // Mike's request — clear the action bar and bookkeeping for everything else.
+  function clearResultActions() {
+    el("resultActions").classList.add("hidden");
+    state.lastResultType = "";
+    state.lastResultData = null;
+    state.lastResultText = "";
+  }
+
+  function showResultActions(type, data, sourceText) {
+    el("resultActions").classList.remove("hidden");
+    state.lastResultType = type;
+    state.lastResultData = data;
+    state.lastResultText = sourceText;
+  }
+
   function renderCheckResults(data) {
     const card = el("resultsCard");
     const content = el("resultsContent");
     card.classList.remove("hidden");
+    clearResultActions();
 
     let html = `<div class="summary-line">${escapeHtml(data.summary || "")}</div>`;
 
@@ -550,6 +630,7 @@
     const card = el("resultsCard");
     const content = el("resultsContent");
     card.classList.remove("hidden");
+    clearResultActions();
     content.innerHTML = `<div class="feedback-text">${renderMarkdownish(data.feedback || "")}</div>`;
   }
 
@@ -557,6 +638,7 @@
     const card = el("resultsCard");
     const content = el("resultsContent");
     card.classList.remove("hidden");
+    clearResultActions();
 
     const badgeClass = data.read === "reads as your own voice" ? "voice"
       : data.read === "mixed — some generic patches" ? "mixed"
@@ -575,15 +657,19 @@
     content.innerHTML = html;
   }
 
-  function renderCritiqueResults(data) {
+  function renderCritiqueResults(data, sourceText) {
     const card = el("resultsCard");
     const content = el("resultsContent");
     card.classList.remove("hidden");
+    showResultActions("critique", data, sourceText);
 
     // Split the original text into paragraphs the same way the Worker does
     // (blank-line separated), so each paragraph can sit directly above its
-    // matching feedback box, mirroring the attached example's layout.
-    const text = el("textArea").value;
+    // matching feedback box, mirroring the attached example's layout. Using
+    // sourceText (not the live textarea) means this also works when
+    // recalling a past entry from history, whose text may differ from
+    // whatever is currently pasted in.
+    const text = sourceText;
     const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim() !== "");
     const boxes = data.boxes || [];
 
@@ -611,10 +697,11 @@
     content.innerHTML = html;
   }
 
-  function renderMarkResults(data) {
+  function renderMarkResults(data, sourceText) {
     const card = el("resultsCard");
     const content = el("resultsContent");
     card.classList.remove("hidden");
+    showResultActions("mark", data, sourceText);
 
     let html = "";
     if (data.headline) {
@@ -623,6 +710,127 @@
     html += `<div class="feedback-text">${renderMarkdownish(data.narrative || "")}</div>`;
 
     content.innerHTML = html;
+  }
+
+  // ---- Plain-text renditions for emailing (mailto bodies can't carry HTML) ----
+  function toPlainTextCritique(data, sourceText) {
+    const paragraphs = sourceText.split(/\n\s*\n/).filter((p) => p.trim() !== "");
+    const boxes = data.boxes || [];
+    let out = "";
+    const count = Math.max(paragraphs.length, boxes.length);
+    for (let i = 0; i < count; i++) {
+      if (paragraphs[i]) out += paragraphs[i] + "\n\n";
+      const box = boxes[i];
+      if (box) {
+        out += (box.heading || "Notes") + ":\n";
+        (box.notes || []).forEach((n) => {
+          out += `- [${n.label || "NOTE"}] ${n.text || ""}\n`;
+        });
+        out += "\n";
+      }
+    }
+    if (data.priorities && data.priorities.length > 0) {
+      out += "Top priorities:\n";
+      data.priorities.forEach((p, idx) => {
+        out += `${idx + 1}. ${p}\n`;
+      });
+      if (data.closingNote) out += "\n" + data.closingNote + "\n";
+    }
+    return out;
+  }
+
+  function toPlainTextMark(data) {
+    let out = "";
+    if (data.headline) out += data.headline + "\n\n";
+    out += (data.narrative || "").replace(/\*\*(.+?)\*\*/g, "$1");
+    return out;
+  }
+
+  async function emailResults() {
+    if (!state.lastResultType) return;
+
+    const plain = state.lastResultType === "critique"
+      ? toPlainTextCritique(state.lastResultData, state.lastResultText)
+      : toPlainTextMark(state.lastResultData);
+
+    const subjectLabel = state.lastResultType === "critique" ? "writing critique" : "writing mark";
+    const subject = `${state.name}'s ${subjectLabel} — ${new Date().toLocaleDateString("en-GB")}`;
+
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(plain);
+      copied = true;
+    } catch (e) {
+      copied = false;
+    }
+
+    const body = copied
+      ? "The full text has been copied to your clipboard — paste it here before sending."
+      : "Couldn't copy automatically — copy the result from the app and paste it here.";
+
+    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    setStatus(
+      copied ? "Copied to clipboard — paste into the email that just opened." : "Couldn't copy automatically — please copy the result manually.",
+      !copied
+    );
+  }
+
+  // ---- History (D1-backed: every /critique and /mark call is saved server-side) ----
+  async function openHistory() {
+    el("historyModal").classList.remove("hidden");
+    el("historyListArea").innerHTML = `<div class="loading">Loading...</div>`;
+    try {
+      const data = await callWorker("/history/list", { name: state.name, pin: state.pin });
+      renderHistoryList(data.entries || []);
+    } catch (err) {
+      el("historyListArea").innerHTML = `<div class="error-box">${escapeHtml("Couldn't load history: " + err.message)}</div>`;
+    }
+  }
+
+  function closeHistory() {
+    el("historyModal").classList.add("hidden");
+  }
+
+  function renderHistoryList(entries) {
+    const area = el("historyListArea");
+    if (entries.length === 0) {
+      area.innerHTML = "<p>No history yet.</p>";
+      return;
+    }
+    area.innerHTML = entries
+      .map((e) => {
+        const date = new Date(e.created_at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+        return `<div class="history-entry" data-id="${e.id}">
+          <span class="history-type">${escapeHtml(e.type)}</span>
+          <span class="history-name">${escapeHtml(e.name)}</span>
+          <span class="history-date">${escapeHtml(date)}</span>
+          <div class="history-title">${escapeHtml(e.title)}</div>
+        </div>`;
+      })
+      .join("");
+
+    area.querySelectorAll(".history-entry").forEach((entryEl) => {
+      entryEl.addEventListener("click", () => loadHistoryEntry(entryEl.getAttribute("data-id")));
+    });
+  }
+
+  async function loadHistoryEntry(id) {
+    el("historyListArea").innerHTML = `<div class="loading">Loading...</div>`;
+    try {
+      const row = await callWorker("/history/get", { name: state.name, pin: state.pin, id });
+      closeHistory();
+      el("resultsCard").classList.remove("hidden");
+      if (row.type === "critique") {
+        renderCritiqueResults(row.result, row.essay_text);
+      } else {
+        renderMarkResults(row.result, row.essay_text);
+      }
+      const date = new Date(row.created_at).toLocaleDateString("en-GB");
+      setStatus(`Showing a past ${row.type} from ${date}.`, false);
+    } catch (err) {
+      el("historyListArea").innerHTML = `<div class="error-box">${escapeHtml("Couldn't load that entry: " + err.message)}</div>`;
+    }
   }
 
   init();

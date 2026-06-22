@@ -12,6 +12,9 @@
  *   POST /mark       — overall mark/profile, calibrated per child (see CHILD_PROFILES) —
  *                       qualitative for Charlotte and Joel (neither has an official
  *                       numeric scale), Edexcel-calibrated numeric for Benjamin
+ *   POST /history/list — past critique/mark records (parents see everyone's, kids see
+ *                       only their own) — requires the DB binding, see below
+ *   POST /history/get  — a single full past record by id, for recall/print/email
  *
  * Required Worker secrets/vars (set via `wrangler secret put` or the
  * Cloudflare dashboard — Settings > Variables):
@@ -19,6 +22,10 @@
  *   FAMILY_PINS         — JSON string, e.g. {"Mike":"1234","Lucy":"2345","Benjamin":"3456","Joel":"4567","Charlotte":"5678"} (secret)
  *   ALLOWED_ORIGIN      — the GitHub Pages origin, e.g. https://yourusername.github.io (var)
  *   MODEL               — optional, defaults to claude-haiku-4-5-20251001 (var)
+ *
+ * Required D1 binding (for history — see README-deploy.md for the one-off
+ * `wrangler d1 create` / schema-execute steps):
+ *   DB — a D1 database bound under the name "DB" in wrangler.toml
  *
  * Deploy with `wrangler deploy`. See README-deploy.md for full steps.
  */
@@ -288,6 +295,103 @@ function countParagraphs(text) {
   return text.split(/\n\s*\n/).filter((p) => p.trim() !== "").length;
 }
 
+// ---- History (D1) ----
+// Parents see every child's history; children see only their own. This is
+// a convenience filter, not real access control — the shared-PIN scheme
+// already means anyone can log in as anyone (see Action note in the vault).
+const PARENT_NAMES = ["Mike", "Lucy"];
+
+function titleFromText(text) {
+  const oneLine = text.trim().replace(/\s+/g, " ");
+  if (oneLine.length <= 60) return oneLine;
+  const cut = oneLine.slice(0, 60);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut) + "...";
+}
+
+async function saveHistory(env, { name, type, text, result }) {
+  if (!env.DB) return; // No DB bound yet — history is a no-op until Mike runs the D1 setup step.
+  try {
+    await env.DB.prepare(
+      "INSERT INTO history (name, type, created_at, title, essay_text, result_json) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+      .bind(name, type, new Date().toISOString(), titleFromText(text), text, JSON.stringify(result))
+      .run();
+  } catch (err) {
+    // History is a nice-to-have — never let a storage failure break the actual critique/mark response.
+    console.error("saveHistory failed", err);
+  }
+}
+
+async function handleHistoryList(request, env) {
+  const { name, pin, type } = await request.json();
+
+  if (!checkAuth(name, pin, env)) {
+    return jsonResponse({ error: "Invalid name or PIN." }, 401, env);
+  }
+  if (!env.DB) {
+    return jsonResponse({ error: "History isn't set up yet — see README-deploy.md for the D1 setup step." }, 503, env);
+  }
+
+  const isParent = PARENT_NAMES.includes(name);
+  try {
+    let query;
+    if (isParent) {
+      query = type
+        ? env.DB.prepare("SELECT id, name, type, created_at, title FROM history WHERE type = ? ORDER BY created_at DESC LIMIT 100").bind(type)
+        : env.DB.prepare("SELECT id, name, type, created_at, title FROM history ORDER BY created_at DESC LIMIT 100");
+    } else {
+      query = type
+        ? env.DB.prepare("SELECT id, name, type, created_at, title FROM history WHERE name = ? AND type = ? ORDER BY created_at DESC LIMIT 50").bind(name, type)
+        : env.DB.prepare("SELECT id, name, type, created_at, title FROM history WHERE name = ? ORDER BY created_at DESC LIMIT 50").bind(name);
+    }
+    const { results } = await query.all();
+    return jsonResponse({ entries: results }, 200, env);
+  } catch (err) {
+    return jsonResponse({ error: String(err.message || err) }, 502, env);
+  }
+}
+
+async function handleHistoryGet(request, env) {
+  const { name, pin, id } = await request.json();
+
+  if (!checkAuth(name, pin, env)) {
+    return jsonResponse({ error: "Invalid name or PIN." }, 401, env);
+  }
+  if (!env.DB) {
+    return jsonResponse({ error: "History isn't set up yet — see README-deploy.md for the D1 setup step." }, 503, env);
+  }
+  if (!id) {
+    return jsonResponse({ error: "No id provided." }, 400, env);
+  }
+
+  try {
+    const row = await env.DB.prepare("SELECT * FROM history WHERE id = ?").bind(id).first();
+    if (!row) {
+      return jsonResponse({ error: "Not found." }, 404, env);
+    }
+    const isParent = PARENT_NAMES.includes(name);
+    if (!isParent && row.name !== name) {
+      return jsonResponse({ error: "Not found." }, 404, env); // Don't reveal existence of another child's entry.
+    }
+    return jsonResponse(
+      {
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        created_at: row.created_at,
+        title: row.title,
+        essay_text: row.essay_text,
+        result: JSON.parse(row.result_json),
+      },
+      200,
+      env
+    );
+  } catch (err) {
+    return jsonResponse({ error: String(err.message || err) }, 502, env);
+  }
+}
+
 async function handleCritique(request, env) {
   const { text, name, pin } = await request.json();
 
@@ -310,6 +414,7 @@ async function handleCritique(request, env) {
       const stripped = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
       parsed = JSON.parse(stripped);
     }
+    await saveHistory(env, { name, type: "critique", text, result: parsed });
     return jsonResponse(parsed, 200, env);
   } catch (err) {
     return jsonResponse({ error: String(err.message || err) }, 502, env);
@@ -339,6 +444,7 @@ async function handleMark(request, env) {
       const stripped = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
       parsed = JSON.parse(stripped);
     }
+    await saveHistory(env, { name, type: "mark", text, result: parsed });
     return jsonResponse(parsed, 200, env);
   } catch (err) {
     return jsonResponse({ error: String(err.message || err) }, 502, env);
@@ -368,7 +474,17 @@ export default {
     if (request.method === "POST" && url.pathname === "/mark") {
       return handleMark(request, env);
     }
+    if (request.method === "POST" && url.pathname === "/history/list") {
+      return handleHistoryList(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/history/get") {
+      return handleHistoryGet(request, env);
+    }
 
-    return jsonResponse({ error: "Not found. Use POST /check, /assist, /ai-check, /critique, or /mark." }, 404, env);
+    return jsonResponse(
+      { error: "Not found. Use POST /check, /assist, /ai-check, /critique, /mark, /history/list, or /history/get." },
+      404,
+      env
+    );
   },
 };

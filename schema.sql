@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  title TEXT NOT NULL,
+  essay_text TEXT NOT NULL,
+  result_json TEXT NOT NULL
+);

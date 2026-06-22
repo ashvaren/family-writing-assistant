@@ -5,3 +5,11 @@ compatibility_date = "2026-06-21"
 [vars]
 ALLOWED_ORIGIN = "https://ashvaren.github.io"
 MODEL = "claude-haiku-4-5-20251001"
+
+# History storage for /critique and /mark. Created by running
+# `wrangler d1 create family-writing-history` once (see README-deploy.md) —
+# that command prints a database_id, paste it in below.
+[[d1_databases]]
+binding = "DB"
+database_name = "family-writing-history"
+database_id = "43c0f409-bba5-4c6f-8b54-e6b1b105a3bd"
