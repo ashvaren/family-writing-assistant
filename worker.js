@@ -188,20 +188,32 @@ ${profile.critique}
 
 Format requirements, these are strict:
 - Do NOT rely on blank lines to find paragraph boundaries — many students paste their work as one continuous block with no blank lines at all, or with single line breaks instead of blank ones. Read the essay and divide it into its natural paragraphs or sections yourself, by topic and structure (e.g. a new point, a new piece of evidence, a shift from one act/section to the next, the introduction, the conclusion). A typical essay this length usually has somewhere between 4 and 8 natural sections — do not return just one or two unless the piece genuinely is that short. Never collapse the whole essay into a single section just because it lacks formatting.
-- For each section, copy its exact text from the essay VERBATIM into the "text" field — character-for-character identical, including the student's own spelling, punctuation and errors. Do not paraphrase it, correct it, or alter it in any way. This is what gets displayed back to the student as their own work, so it must be exactly theirs. Together, the "text" fields across all sections should reconstruct the entire essay with nothing missing and nothing added.
-- Give each section a feedback box: a short heading (e.g. "Notes on your introduction", "Notes on paragraph 2") and 2–4 notes where there is more than one thing worth saying about that section — don't limit yourself to one note per box if there's genuinely more to comment on. If a section has nothing wrong with it, still give it a box with at least one note (e.g. a [WELL DONE]) — never skip a section.
-- Each note must start with a short bracketed-style label (e.g. SENTENCE, SPELLING, PUNCTUATION, WORD CHOICE, STRUCTURE, WELL DONE) describing the kind of note, calibrated to the writer's level as described above — do not use GCSE/exam jargon for Charlotte or Joel.
+- For each section, reproduce its exact text from the essay VERBATIM — character-for-character identical, including the student's own spelling, punctuation and errors, including any quotation marks it contains. Do not paraphrase it, correct it, or alter it in any way. This is what gets displayed back to the student as their own work, so it must be exactly theirs. Together, the reproduced sections should reconstruct the entire essay with nothing missing and nothing added.
+- Give each section a feedback box: a short heading (e.g. "Notes on your introduction", "Notes on paragraph 2") and 2–4 notes where there is more than one thing worth saying about that section — don't limit yourself to one note per box if there's genuinely more to comment on. If a section has nothing wrong with it, still give it a box with at least one note (e.g. a WELL DONE) — never skip a section.
+- Each note must start with a short label (e.g. SENTENCE, SPELLING, PUNCTUATION, WORD CHOICE, STRUCTURE, WELL DONE) describing the kind of note, calibrated to the writer's level as described above — do not use GCSE/exam jargon for Charlotte or Joel.
 - Quote the exact words from the essay you are commenting on wherever possible, so the writer can find them.
 - Be specific and concrete, never vague ("this could be better").
 - End with exactly three top priorities — the three changes that would most improve the piece, in order of impact — and one short encouraging closing line.
-- Return ONLY valid JSON, no other text, in this exact shape:
-{
-  "paragraphs": [
-    { "text": "the exact verbatim text of this section of the essay", "heading": "short heading, e.g. Notes on your introduction, or Notes on paragraph 2", "notes": [ { "label": "SENTENCE", "text": "the note itself" } ] }
-  ],
-  "priorities": ["first priority", "second priority", "third priority"],
-  "closingNote": "one short encouraging sentence"
-}`;
+
+Output format — this is critical: do NOT use JSON. The essay text you must reproduce is full of the student's own quotation marks (quoted dialogue, quoted lines from a text), and JSON breaks when quotes inside a string aren't escaped perfectly. Use this exact plain-text marker format instead, with no other commentary before, between, or after the blocks:
+
+===PARAGRAPH===
+(the exact verbatim text of this section)
+===HEADING===
+(short heading for this section)
+===NOTES===
+LABEL: note text
+LABEL: note text
+===END===
+
+Repeat the ===PARAGRAPH=== through ===END=== block once for every section of the essay — there is no limit on how many times you repeat this block. After the last one, finish with:
+
+===PRIORITIES===
+first priority
+second priority
+third priority
+===CLOSING===
+one short encouraging sentence`;
 }
 
 function buildMarkPrompt(name) {
@@ -211,13 +223,80 @@ function buildMarkPrompt(name) {
 ${profile.mark}
 
 Format requirements:
-- Plain prose only in the narrative field. You may use **bold** for short labels and "- " for bullet points, with a blank line between paragraphs or list blocks. No markdown headers, numbered lists or code blocks.
-- The headline field is a single short line summarising the result (e.g. "Mark: 23/30 (indicative)" or "Profile: strong ideas, structure needs work" or "Need a bit more information first").
-- Return ONLY valid JSON, no other text, in this exact shape:
-{
-  "headline": "one short line",
-  "narrative": "the full assessment, plain prose with the limited markdown described above"
-}`;
+- Plain prose only in the narrative. You may use **bold** for short labels and "- " for bullet points, with a blank line between paragraphs or list blocks. No markdown headers, numbered lists or code blocks.
+- The headline is a single short line summarising the result (e.g. "Mark: 23/30 (indicative)" or "Profile: strong ideas, structure needs work" or "Need a bit more information first").
+- Do NOT use JSON — quoting the essay (e.g. specific lines or dialogue) inside a JSON string is exactly the kind of thing that breaks JSON parsing when quotes aren't escaped perfectly. Use this exact plain-text marker format instead, with no other commentary before or after:
+
+===HEADLINE===
+(one short line)
+===NARRATIVE===
+(the full assessment, plain prose with the limited markdown described above)`;
+}
+
+// ---- Delimited-text parsers for /critique and /mark ----
+// Deliberately not JSON: both responses need to embed the student's own
+// essay text verbatim, which is routinely full of quotation marks (quoted
+// dialogue, quoted lines from a text). Asking a model to escape every
+// embedded quote perfectly inside a JSON string is a known failure mode —
+// it broke in practice on a real essay. Markers that are vanishingly
+// unlikely to appear in student writing sidestep the whole problem.
+function parseCritiqueResponse(raw) {
+  const paragraphs = [];
+  const paraRegex = /===PARAGRAPH===\s*([\s\S]*?)\s*===HEADING===\s*([\s\S]*?)\s*===NOTES===\s*([\s\S]*?)\s*===END===/g;
+  let match;
+  while ((match = paraRegex.exec(raw)) !== null) {
+    const text = match[1].trim();
+    const heading = match[2].trim();
+    const notes = match[3]
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const colonIdx = line.indexOf(":");
+        if (colonIdx === -1) return { label: "NOTE", text: line };
+        return {
+          label: line.slice(0, colonIdx).trim(),
+          text: line.slice(colonIdx + 1).trim(),
+        };
+      });
+    paragraphs.push({ text, heading, notes });
+  }
+
+  let priorities = [];
+  const prioritiesMatch = raw.match(/===PRIORITIES===\s*([\s\S]*?)\s*===CLOSING===/);
+  if (prioritiesMatch) {
+    priorities = prioritiesMatch[1]
+      .split("\n")
+      .map((l) => l.trim().replace(/^\d+[.)]\s*/, ""))
+      .filter((l) => l.length > 0);
+  }
+
+  let closingNote = "";
+  const closingMatch = raw.match(/===CLOSING===\s*([\s\S]*?)\s*$/);
+  if (closingMatch) {
+    closingNote = closingMatch[1].trim();
+  }
+
+  if (paragraphs.length === 0) {
+    throw new Error("Couldn't parse the critique response into paragraphs — the model may not have followed the expected format.");
+  }
+
+  return { paragraphs, priorities, closingNote };
+}
+
+function parseMarkResponse(raw) {
+  const headlineMatch = raw.match(/===HEADLINE===\s*([\s\S]*?)\s*===NARRATIVE===/);
+  const narrativeMatch = raw.match(/===NARRATIVE===\s*([\s\S]*?)\s*$/);
+
+  if (!headlineMatch && !narrativeMatch) {
+    throw new Error("Couldn't parse the mark response — the model may not have followed the expected format.");
+  }
+
+  return {
+    headline: headlineMatch ? headlineMatch[1].trim() : "",
+    narrative: narrativeMatch ? narrativeMatch[1].trim() : raw.trim(),
+  };
 }
 
 async function handleCheck(request, env) {
@@ -408,13 +487,7 @@ async function handleCritique(request, env) {
     // as well as the feedback itself, which roughly doubles the output
     // length relative to the input.
     const raw = await callClaude(env, buildCritiquePrompt(name), userMessage, 6000);
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      const stripped = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
-      parsed = JSON.parse(stripped);
-    }
+    const parsed = parseCritiqueResponse(raw);
     await saveHistory(env, { name, type: "critique", text, result: parsed });
     return jsonResponse(parsed, 200, env);
   } catch (err) {
@@ -438,13 +511,7 @@ async function handleMark(request, env) {
 
   try {
     const raw = await callClaude(env, buildMarkPrompt(name), userMessage, 1500);
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      const stripped = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
-      parsed = JSON.parse(stripped);
-    }
+    const parsed = parseMarkResponse(raw);
     await saveHistory(env, { name, type: "mark", text, result: parsed });
     return jsonResponse(parsed, 200, env);
   } catch (err) {
