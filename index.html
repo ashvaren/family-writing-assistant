@@ -663,31 +663,24 @@
     card.classList.remove("hidden");
     showResultActions("critique", data, sourceText);
 
-    // Split the original text into paragraphs the same way the Worker does
-    // (blank-line separated), so each paragraph can sit directly above its
-    // matching feedback box, mirroring the attached example's layout. Using
-    // sourceText (not the live textarea) means this also works when
-    // recalling a past entry from history, whose text may differ from
-    // whatever is currently pasted in.
-    const text = sourceText;
-    const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim() !== "");
-    const boxes = data.boxes || [];
+    // Paragraph boundaries come from the model now, not from splitting on
+    // blank lines client-side — essays pasted as one continuous block (no
+    // blank lines at all) used to collapse into a single box; the Worker
+    // now segments the essay itself and returns each section's own verbatim
+    // text alongside its box, in data.paragraphs.
+    const paragraphs = data.paragraphs || [];
 
     let html = "";
-    const count = Math.max(paragraphs.length, boxes.length);
-    for (let i = 0; i < count; i++) {
-      if (paragraphs[i]) {
-        html += `<p class="essay-para">${escapeHtml(paragraphs[i]).replace(/\n/g, "<br>")}</p>`;
+    paragraphs.forEach((para, i) => {
+      if (para.text) {
+        html += `<p class="essay-para">${escapeHtml(para.text).replace(/\n/g, "<br>")}</p>`;
       }
-      const box = boxes[i];
-      if (box) {
-        const colorClass = "c" + (i % 4);
-        const notesHtml = (box.notes || [])
-          .map((n) => `<div class="note"><span class="note-label">[${escapeHtml(n.label || "NOTE")}]</span> ${escapeHtml(n.text || "")}</div>`)
-          .join("");
-        html += `<div class="feedback-box ${colorClass}"><span class="box-heading">${escapeHtml(box.heading || "Notes")}</span>${notesHtml}</div>`;
-      }
-    }
+      const colorClass = "c" + (i % 4);
+      const notesHtml = (para.notes || [])
+        .map((n) => `<div class="note"><span class="note-label">[${escapeHtml(n.label || "NOTE")}]</span> ${escapeHtml(n.text || "")}</div>`)
+        .join("");
+      html += `<div class="feedback-box ${colorClass}"><span class="box-heading">${escapeHtml(para.heading || "Notes")}</span>${notesHtml}</div>`;
+    });
 
     if (data.priorities && data.priorities.length > 0) {
       const itemsHtml = data.priorities.map((p) => `<li>${escapeHtml(p)}</li>`).join("");
@@ -714,21 +707,16 @@
 
   // ---- Plain-text renditions for emailing (mailto bodies can't carry HTML) ----
   function toPlainTextCritique(data, sourceText) {
-    const paragraphs = sourceText.split(/\n\s*\n/).filter((p) => p.trim() !== "");
-    const boxes = data.boxes || [];
+    const paragraphs = data.paragraphs || [];
     let out = "";
-    const count = Math.max(paragraphs.length, boxes.length);
-    for (let i = 0; i < count; i++) {
-      if (paragraphs[i]) out += paragraphs[i] + "\n\n";
-      const box = boxes[i];
-      if (box) {
-        out += (box.heading || "Notes") + ":\n";
-        (box.notes || []).forEach((n) => {
-          out += `- [${n.label || "NOTE"}] ${n.text || ""}\n`;
-        });
-        out += "\n";
-      }
-    }
+    paragraphs.forEach((para) => {
+      if (para.text) out += para.text + "\n\n";
+      out += (para.heading || "Notes") + ":\n";
+      (para.notes || []).forEach((n) => {
+        out += `- [${n.label || "NOTE"}] ${n.text || ""}\n`;
+      });
+      out += "\n";
+    });
     if (data.priorities && data.priorities.length > 0) {
       out += "Top priorities:\n";
       data.priorities.forEach((p, idx) => {

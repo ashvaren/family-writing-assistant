@@ -187,15 +187,17 @@ function buildCritiquePrompt(name) {
 ${profile.critique}
 
 Format requirements, these are strict:
-- The submitted text is split into paragraphs by blank lines. You will be told how many paragraphs there are. Return EXACTLY one feedback box per paragraph, in the same order, even if a paragraph has nothing wrong with it — in that case give it a single encouraging note rather than skipping it. Never skip a paragraph.
+- Do NOT rely on blank lines to find paragraph boundaries — many students paste their work as one continuous block with no blank lines at all, or with single line breaks instead of blank ones. Read the essay and divide it into its natural paragraphs or sections yourself, by topic and structure (e.g. a new point, a new piece of evidence, a shift from one act/section to the next, the introduction, the conclusion). A typical essay this length usually has somewhere between 4 and 8 natural sections — do not return just one or two unless the piece genuinely is that short. Never collapse the whole essay into a single section just because it lacks formatting.
+- For each section, copy its exact text from the essay VERBATIM into the "text" field — character-for-character identical, including the student's own spelling, punctuation and errors. Do not paraphrase it, correct it, or alter it in any way. This is what gets displayed back to the student as their own work, so it must be exactly theirs. Together, the "text" fields across all sections should reconstruct the entire essay with nothing missing and nothing added.
+- Give each section a feedback box: a short heading (e.g. "Notes on your introduction", "Notes on paragraph 2") and 2–4 notes where there is more than one thing worth saying about that section — don't limit yourself to one note per box if there's genuinely more to comment on. If a section has nothing wrong with it, still give it a box with at least one note (e.g. a [WELL DONE]) — never skip a section.
 - Each note must start with a short bracketed-style label (e.g. SENTENCE, SPELLING, PUNCTUATION, WORD CHOICE, STRUCTURE, WELL DONE) describing the kind of note, calibrated to the writer's level as described above — do not use GCSE/exam jargon for Charlotte or Joel.
 - Quote the exact words from the essay you are commenting on wherever possible, so the writer can find them.
 - Be specific and concrete, never vague ("this could be better").
 - End with exactly three top priorities — the three changes that would most improve the piece, in order of impact — and one short encouraging closing line.
 - Return ONLY valid JSON, no other text, in this exact shape:
 {
-  "boxes": [
-    { "heading": "short heading, e.g. Notes on your introduction, or Notes on paragraph 2", "notes": [ { "label": "SENTENCE", "text": "the note itself" } ] }
+  "paragraphs": [
+    { "text": "the exact verbatim text of this section of the essay", "heading": "short heading, e.g. Notes on your introduction, or Notes on paragraph 2", "notes": [ { "label": "SENTENCE", "text": "the note itself" } ] }
   ],
   "priorities": ["first priority", "second priority", "third priority"],
   "closingNote": "one short encouraging sentence"
@@ -289,10 +291,6 @@ async function handleAiCheck(request, env) {
   } catch (err) {
     return jsonResponse({ error: String(err.message || err) }, 502, env);
   }
-}
-
-function countParagraphs(text) {
-  return text.split(/\n\s*\n/).filter((p) => p.trim() !== "").length;
 }
 
 // ---- History (D1) ----
@@ -402,11 +400,14 @@ async function handleCritique(request, env) {
     return jsonResponse({ error: "No text provided." }, 400, env);
   }
 
-  const paragraphCount = countParagraphs(text);
-  const userMessage = `This piece of writing has ${paragraphCount} paragraph(s), split by blank lines. Return exactly ${paragraphCount} box(es), one per paragraph, in order.\n\nHere is the writing:\n\n${text}`;
+  const userMessage = `Here is the writing to critique. Divide it into its own natural paragraphs yourself — do not assume blank lines mark the boundaries:\n\n${text}`;
 
   try {
-    const raw = await callClaude(env, buildCritiquePrompt(name), userMessage, 3000);
+    // Higher token budget than the other endpoints: the response must
+    // reproduce the entire essay verbatim (split across paragraph fields)
+    // as well as the feedback itself, which roughly doubles the output
+    // length relative to the input.
+    const raw = await callClaude(env, buildCritiquePrompt(name), userMessage, 6000);
     let parsed;
     try {
       parsed = JSON.parse(raw);
